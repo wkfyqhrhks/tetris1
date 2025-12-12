@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>나만의 우주 테트리스</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #020617;
+      color: #e5e7eb;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    h1 { margin-bottom: 8px; font-size: 20px; }
+    #container {
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+    }
+    canvas {
+      background: #020617;
+      border: 2px solid #4b5563;
+      box-shadow: 0 0 16px rgba(0,0,0,0.7);
+    }
+    #ui {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 14px;
+      min-width: 150px;
+    }
+    .panel {
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: #020617;
+      border: 1px solid #374151;
+    }
+    label {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    button {
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      background: #3b82f6;
+      color: white;
+    }
+    button:hover { filter: brightness(1.05); }
+    button:active { filter: brightness(0.95); }
+    #volume { width: 100%; }
+    small { font-size: 11px; color: #9ca3af; }
+  </style>
+</head>
+<body>
+
+  <h1>나만의 우주 테트리스 🌌</h1>
+
+  <div id="container">
+    <canvas id="game" width="240" height="480"></canvas>
+
+    <div id="ui">
+      <div class="panel">
+        <label>Score <span id="score">0</span></label>
+        <label>Lines <span id="lines">0</span></label>
+        <label>Level <span id="level">1</span></label>
+      </div>
+
+      <div class="panel">
+        <button id="startBtn">Start / Restart</button>
+      </div>
+
+      <div class="panel">
+        <button id="muteBtn">Mute</button>
+        <label>Volume
+          <input type="range" id="volume" min="0" max="1" step="0.01" value="0.5">
+        </label>
+        <small>※ Start 버튼을 눌러야 BGM 재생</small>
+      </div>
+
+      <div class="panel">
+        <div>조작법</div>
+        <small>
+          ← → : 좌우 이동<br>
+          ↑ : 회전<br>
+          ↓ : 빠르게 내리기<br>
+          Space : 하드 드롭
+        </small>
+      </div>
+    </div>
+  </div>
+
+  <!-- BGM -->
+  <audio id="bgm" src="테트리스bgm.mp3" loop></audio>
+
+  <script>
+    // ========================
+    // 기본 설정
+    // ========================
+    const COLS = 10;
+    const ROWS = 20;
+    const BLOCK_SIZE = 24;
+
+    const KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, SPACE: 32 };
+    const BASE_DROP_INTERVAL = 800;
+
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    const scoreEl = document.getElementById('score');
+    const linesEl = document.getElementById('lines');
+    const levelEl = document.getElementById('level');
+    const startBtn = document.getElementById('startBtn');
+    const muteBtn = document.getElementById('muteBtn');
+    const volumeSlider = document.getElementById('volume');
+
+    // ========================
+    // 배경 이미지
+    // ========================
+    const bgImage = new Image();
+    bgImage.src = 'background1.png';   // 같은 폴더의 background1.png
+    let bgLoaded = false;
+    bgImage.onload = () => { bgLoaded = true; };
+
+    // ========================
+    // BGM
+    // ========================
+    const bgm = document.getElementById('bgm');
+    let isMuted = false;
+    bgm.volume = parseFloat(volumeSlider.value);
+
+    function playBgm() {
+      if (bgm.paused && !isMuted) {
+        bgm.currentTime = 0;
+        bgm.play().catch(() => {});
+      }
+    }
+
+    function stopBgm() {
+      bgm.pause();
+      bgm.currentTime = 0;
+    }
+
+    muteBtn.addEventListener('click', () => {
+      isMuted = !isMuted;
+      bgm.muted = isMuted;
+      muteBtn.textContent = isMuted ? 'Unmute' : 'Mute';
+    });
+
+    volumeSlider.addEventListener('input', () => {
+      bgm.volume = parseFloat(volumeSlider.value);
+    });
+
+    // ========================
+    // 게임 상태
+    // ========================
+    let board;
+    let currentPiece;
+    let score = 0;
+    let lines = 0;
+    let level = 1;
+
+    let lastTime = 0;
+    let dropCounter = 0;
+    let dropInterval = BASE_DROP_INTERVAL;
+
+    let animationId;
+    let gameOverFlag = false;
+
+    const TETROMINOS = [
+      null,
+      { matrix: [[1,1,1,1]], color: '#22d3ee' },          // I
+      { matrix: [[1,1],[1,1]], color: '#eab308' },        // O
+      { matrix: [[0,1,0],[1,1,1]], color: '#a855f7' },    // T
+      { matrix: [[0,1,1],[1,1,0]], color: '#22c55e' },    // S
+      { matrix: [[1,1,0],[0,1,1]], color: '#ef4444' },    // Z
+      { matrix: [[1,0,0],[1,1,1]], color: '#3b82f6' },    // J
+      { matrix: [[0,0,1],[1,1,1]], color: '#f97316' }     // L
+    ];
+
+    // ========================
+    // 유틸 함수
+    // ========================
+    function createBoard() {
+      return Array.from({ length: ROWS }, () => Array(COLS).fill(0));
+    }
+
+    function updateUI() {
+      scoreEl.textContent = score;
+      linesEl.textContent = lines;
+      levelEl.textContent = level;
+    }
+
+    function getColor(type) {
+      return TETROMINOS[type].color;
+    }
+
+    // ========================
+    // 렌더링
+    // ========================
+    function drawCell(x, y, type) {
+      ctx.save();
+      ctx.globalAlpha = 0.9; // 약간 반투명해서 배경이 비치게
+      ctx.fillStyle = getColor(type);
+      ctx.fillRect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+      ctx.strokeStyle = '#020617';
+      ctx.strokeRect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+      ctx.restore();
+    }
+
+    function drawBoard() {
+      // 배경 먼저
+      if (bgLoaded) {
+        ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+      } else {
+        ctx.fillStyle = '#020617';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+
+      // 그 위에 고정된 블록들
+      for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+          if (board[y][x]) drawCell(x, y, board[y][x]);
+        }
+      }
+    }
+
+    function drawPiece(piece) {
+      piece.matrix.forEach((row, dy) => {
+        row.forEach((v, dx) => {
+          if (v) drawCell(piece.x + dx, piece.y + dy, piece.type);
+        });
+      });
+    }
+
+    // ========================
+    // 충돌 검사
+    // ========================
+    function isValidPosition(piece, offsetX = 0, offsetY = 0) {
+      const m = piece.matrix;
+      const x = piece.x + offsetX;
+      const y = piece.y + offsetY;
+
+      for (let r = 0; r < m.length; r++) {
+        for (let c = 0; c < m[r].length; c++) {
+          if (!m[r][c]) continue;
+
+          const nx = x + c;
+          const ny = y + r;
+
+          if (nx < 0 || nx >= COLS || ny >= ROWS) return false;
+          if (ny >= 0 && board[ny][nx]) return false;
+        }
+      }
+      return true;
+    }
+
+    // ========================
+    // 조각 관리
+    // ========================
+    function spawnNewPiece() {
+      const type = Math.floor(Math.random() * 7) + 1;
+      const matrix = TETROMINOS[type].matrix.map(r => [...r]);
+
+      currentPiece = {
+        type,
+        matrix,
+        x: Math.floor(COLS / 2) - Math.floor(matrix[0].length / 2),
+        y: -2
+      };
+
+      if (!isValidPosition(currentPiece, 0, 0)) gameOver();
+    }
+
+    function lockPiece() {
+      currentPiece.matrix.forEach((row, dy) => {
+        row.forEach((v, dx) => {
+          if (!v) return;
+          const x = currentPiece.x + dx;
+          const y = currentPiece.y + dy;
+          if (y >= 0) board[y][x] = currentPiece.type;
+        });
+      });
+      clearLines();
+    }
+
+    function clearLines() {
+      let cleared = 0;
+
+      outer: for (let y = ROWS - 1; y >= 0; y--) {
+        for (let x = 0; x < COLS; x++) {
+          if (!board[y][x]) continue outer;
+        }
+        board.splice(y, 1);
+        board.unshift(Array(COLS).fill(0));
+        cleared++;
+        y++;
+      }
+
+      if (cleared > 0) {
+        lines += cleared;
+        score += [0, 100, 250, 400, 700][cleared];
+        level = Math.floor(lines / 10) + 1;
+        dropInterval = Math.max(120, BASE_DROP_INTERVAL - (level - 1) * 80);
+        bgm.playbackRate = 1 + (level - 1) * 0.05;
+        updateUI();
+      }
+    }
+
+    // ========================
+    // 이동 / 회전
+    // ========================
+    function move(dir) {
+      if (isValidPosition(currentPiece, dir, 0)) currentPiece.x += dir;
+    }
+
+    function moveDown() {
+      if (isValidPosition(currentPiece, 0, 1)) {
+        currentPiece.y++;
+      } else {
+        lockPiece();
+        spawnNewPiece();
+      }
+    }
+
+    function rotateMatrix(matrix) {
+      return matrix[0].map((_, i) => matrix.map(r => r[i]).reverse());
+    }
+
+    function rotate() {
+      const old = currentPiece.matrix;
+      currentPiece.matrix = rotateMatrix(old);
+
+      if (!isValidPosition(currentPiece, 0, 0)) {
+        if (isValidPosition(currentPiece, -1, 0)) currentPiece.x--;
+        else if (isValidPosition(currentPiece, 1, 0)) currentPiece.x++;
+        else currentPiece.matrix = old;
+      }
+    }
+
+    function hardDrop() {
+      while (isValidPosition(currentPiece, 0, 1)) {
+        currentPiece.y++;
+      }
+      lockPiece();
+      spawnNewPiece();
+    }
+
+    // ========================
+    // 게임 루프
+    // ========================
+    function update(t = 0) {
+      if (gameOverFlag) return;
+
+      const delta = t - lastTime;
+      lastTime = t;
+      dropCounter += delta;
+
+      if (dropCounter > dropInterval) {
+        moveDown();
+        dropCounter = 0;
+      }
+
+      drawBoard();
+      if (currentPiece) drawPiece(currentPiece);
+
+      animationId = requestAnimationFrame(update);
+    }
+
+    function gameOver() {
+      gameOverFlag = true;
+      stopBgm();
+      cancelAnimationFrame(animationId);
+      alert('Game Over!');
+    }
+
+    function startGame() {
+      board = createBoard();
+      score = 0;
+      lines = 0;
+      level = 1;
+      dropInterval = BASE_DROP_INTERVAL;
+      gameOverFlag = false;
+      updateUI();
+
+      spawnNewPiece();
+      lastTime = 0;
+      dropCounter = 0;
+
+      playBgm();
+      cancelAnimationFrame(animationId);
+      animationId = requestAnimationFrame(update);
+    }
+
+    // ========================
+    // 입력 처리
+    // ========================
+    document.addEventListener('keydown', (e) => {
+      if (gameOverFlag) return;
+
+      if ([KEY.LEFT, KEY.RIGHT, KEY.UP, KEY.DOWN, KEY.SPACE].includes(e.keyCode)) {
+        e.preventDefault();
+      }
+
+      switch (e.keyCode) {
+        case KEY.LEFT:  move(-1); break;
+        case KEY.RIGHT: move(1);  break;
+        case KEY.DOWN:  moveDown(); break;
+        case KEY.UP:    rotate(); break;
+        case KEY.SPACE: hardDrop(); break;
+      }
+    });
+
+    startBtn.addEventListener('click', startGame);
+
+    // 초기 상태
+    board = createBoard();
+    drawBoard();
+  </script>
+</body>
+</html>

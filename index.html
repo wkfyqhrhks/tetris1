@@ -268,4 +268,223 @@
 
       // 그 위에 고정된 블록들
       for (let y = 0; y < ROWS; y++) {
-        for (let x = 0;
+        for (let x = 0; x < COLS; x++) {
+          if (board[y][x]) drawCell(x, y, board[y][x]);
+        }
+      }
+    }
+
+    function drawPiece(piece) {
+      piece.matrix.forEach((row, dy) => {
+        row.forEach((v, dx) => {
+          if (v) drawCell(piece.x + dx, piece.y + dy, piece.type);
+        });
+      });
+    }
+
+    // ========================
+    // 충돌 검사
+    // ========================
+    function isValidPosition(piece, offsetX = 0, offsetY = 0) {
+      const m = piece.matrix;
+      const x = piece.x + offsetX;
+      const y = piece.y + offsetY;
+
+      for (let r = 0; r < m.length; r++) {
+        for (let c = 0; c < m[r].length; c++) {
+          if (!m[r][c]) continue;
+
+          const nx = x + c;
+          const ny = y + r;
+
+          if (nx < 0 || nx >= COLS || ny >= ROWS) return false;
+          if (ny >= 0 && board[ny][nx]) return false;
+        }
+      }
+      return true;
+    }
+
+    // ========================
+    // 조각 관리
+    // ========================
+    function spawnNewPiece() {
+      const type = Math.floor(Math.random() * 7) + 1;
+      const matrix = TETROMINOS[type].matrix.map(r => [...r]);
+
+      currentPiece = {
+        type,
+        matrix,
+        x: Math.floor(COLS / 2) - Math.floor(matrix[0].length / 2),
+        y: -2
+      };
+
+      if (!isValidPosition(currentPiece, 0, 0)) gameOver();
+    }
+
+    function lockPiece() {
+      currentPiece.matrix.forEach((row, dy) => {
+        row.forEach((v, dx) => {
+          if (!v) return;
+          const x = currentPiece.x + dx;
+          const y = currentPiece.y + dy;
+          if (y >= 0) board[y][x] = currentPiece.type;
+        });
+      });
+      clearLines();
+    }
+
+    function clearLines() {
+      let cleared = 0;
+
+      outer: for (let y = ROWS - 1; y >= 0; y--) {
+        for (let x = 0; x < COLS; x++) {
+          if (!board[y][x]) continue outer;
+        }
+        board.splice(y, 1);
+        board.unshift(Array(COLS).fill(0));
+        cleared++;
+        y++;
+      }
+
+      if (cleared > 0) {
+        lines += cleared;
+        score += [0, 100, 250, 400, 700][cleared];
+        level = Math.floor(lines / 10) + 1;
+        dropInterval = Math.max(120, BASE_DROP_INTERVAL - (level - 1) * 80);
+
+        // 레벨에 따라 배경 & BGM 교체
+        if (level >= BG_CHANGE_LEVEL) {
+          currentBgIndex = 1;     // background2.png
+          switchBgm(1);           // 테트리스bgm2.mp3
+        } else {
+          currentBgIndex = 0;
+          switchBgm(0);
+        }
+
+        // 레벨에 따라 BGM 속도 변화 (현재 BGM에 적용)
+        const bgm = getCurrentBgm();
+        bgm.playbackRate = 1 + (level - 1) * 0.05;
+
+        updateUI();
+      }
+    }
+
+    // ========================
+    // 이동 / 회전
+    // ========================
+    function move(dir) {
+      if (isValidPosition(currentPiece, dir, 0)) currentPiece.x += dir;
+    }
+
+    function moveDown() {
+      if (isValidPosition(currentPiece, 0, 1)) {
+        currentPiece.y++;
+      } else {
+        lockPiece();
+        spawnNewPiece();
+      }
+    }
+
+    function rotateMatrix(matrix) {
+      return matrix[0].map((_, i) => matrix.map(r => r[i]).reverse());
+    }
+
+    function rotate() {
+      const old = currentPiece.matrix;
+      currentPiece.matrix = rotateMatrix(old);
+
+      if (!isValidPosition(currentPiece, 0, 0)) {
+        if (isValidPosition(currentPiece, -1, 0)) currentPiece.x--;
+        else if (isValidPosition(currentPiece, 1, 0)) currentPiece.x++;
+        else currentPiece.matrix = old;
+      }
+    }
+
+    function hardDrop() {
+      while (isValidPosition(currentPiece, 0, 1)) {
+        currentPiece.y++;
+      }
+      lockPiece();
+      spawnNewPiece();
+    }
+
+    // ========================
+    // 게임 루프
+    // ========================
+    function update(t = 0) {
+      if (gameOverFlag) return;
+
+      const delta = t - lastTime;
+      lastTime = t;
+      dropCounter += delta;
+
+      if (dropCounter > dropInterval) {
+        moveDown();
+        dropCounter = 0;
+      }
+
+      drawBoard();
+      if (currentPiece) drawPiece(currentPiece);
+
+      animationId = requestAnimationFrame(update);
+    }
+
+    function gameOver() {
+      gameOverFlag = true;
+      stopBgm();
+      cancelAnimationFrame(animationId);
+      alert('Game Over!');
+    }
+
+    function startGame() {
+      board = createBoard();
+      score = 0;
+      lines = 0;
+      level = 1;
+      dropInterval = BASE_DROP_INTERVAL;
+      gameOverFlag = false;
+      updateUI();
+
+      // 처음 시작 시 기본 배경/BGM으로 초기화
+      currentBgIndex = 0;
+      switchBgm(0);
+      bgmElements.forEach(bgm => {
+        bgm.playbackRate = 1;
+      });
+
+      spawnNewPiece();
+      lastTime = 0;
+      dropCounter = 0;
+
+      playBgm();
+      cancelAnimationFrame(animationId);
+      animationId = requestAnimationFrame(update);
+    }
+
+    // ========================
+    // 입력 처리
+    // ========================
+    document.addEventListener('keydown', (e) => {
+      if (gameOverFlag) return;
+
+      if ([KEY.LEFT, KEY.RIGHT, KEY.UP, KEY.DOWN, KEY.SPACE].includes(e.keyCode)) {
+        e.preventDefault();
+      }
+
+      switch (e.keyCode) {
+        case KEY.LEFT:  move(-1); break;
+        case KEY.RIGHT: move(1);  break;
+        case KEY.DOWN:  moveDown(); break;
+        case KEY.UP:    rotate(); break;
+        case KEY.SPACE: hardDrop(); break;
+      }
+    });
+
+    startBtn.addEventListener('click', startGame);
+
+    // 초기 상태
+    board = createBoard();
+    drawBoard();
+  </script>
+</body>
+</html>
